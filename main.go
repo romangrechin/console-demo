@@ -16,7 +16,6 @@ limitations under the License.
 package main
 
 import (
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -25,11 +24,12 @@ import (
 
 	"github.com/kr/pty"
 	"golang.org/x/net/websocket"
+	"os"
+	"strconv"
 )
 
 const (
-	webAssetsDir = "www"
-	listenAddr   = "0.0.0.0:5000"
+	listenAddr = "0.0.0.0:5000"
 )
 
 type Handler struct {
@@ -37,14 +37,12 @@ type Handler struct {
 }
 
 func main() {
-	fmt.Printf("Listening on http://%s\n", listenAddr)
 	http.ListenAndServe(listenAddr, &Handler{
-		fileServer: http.FileServer(http.Dir(webAssetsDir)),
+		fileServer: http.FileServer(assetFS()),
 	})
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%v %v", r.Method, r.URL.Path)
 	// need to serve shell via websocket?
 	if strings.Trim(r.URL.Path, "/") == "shell" {
 		onShell(w, r)
@@ -57,7 +55,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // GET /shell handler
 // Launches /bin/bash and starts serving it via the terminal
 func onShell(w http.ResponseWriter, r *http.Request) {
+	cols, _ := strconv.Atoi(r.FormValue("cols"))
+	rows, _ := strconv.Atoi(r.FormValue("rows"))
+
 	wsHandler := func(ws *websocket.Conn) {
+		var tty *os.File
+		var err error
 		// wrap the websocket into UTF-8 wrappers:
 		wrapper := NewWebSockWrapper(ws, WebSocketTextMode)
 		stdout := wrapper
@@ -70,7 +73,16 @@ func onShell(w http.ResponseWriter, r *http.Request) {
 		// TODO: replace /bin/bash with:
 		//		 kubectl exec -ti <pod> --container <container name> -- /bin/bash
 		cmd := exec.Command("/bin/bash")
-		tty, err := pty.Start(cmd)
+
+		if cols > 0 && rows > 0 {
+			tty, err = pty.StartWithSize(cmd, &pty.Winsize{
+				Cols: uint16(cols),
+				Rows: uint16(rows),
+			})
+		} else {
+			tty, err = pty.Start(cmd)
+		}
+
 		if err != nil {
 			panic(err)
 		}
